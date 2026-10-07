@@ -7,12 +7,25 @@ from risk_resource.adapters.worker import JobWorker
 from risk_resource.transport.api import create_app
 
 
-def test_comparison_and_audit_endpoints():
+def test_comparison_and_audit_endpoints(monkeypatch):
+    token = "platform-secret"
+    digest = hashlib.sha256(token.encode()).hexdigest()
+
+    monkeypatch.setenv(
+        "RR_API_KEYS",
+        json.dumps({digest: {"user": "ops", "team": "demo", "role": "approver"}}),
+    )
     client = TestClient(create_app())
+    headers = {"x-api-key": token}
     assert client.get("/").status_code == 200
-    assert client.get("/scenarios/demo-week/compare").status_code == 200
-    assert client.get("/scenarios/demo-week/sensitivity").status_code == 200
-    result = client.post("/scenarios/demo-week/baseline").json()
+    assert (
+        client.get("/scenarios/demo-week/compare", headers=headers).status_code == 200
+    )
+    assert (
+        client.get("/scenarios/demo-week/sensitivity", headers=headers).status_code
+        == 200
+    )
+    result = client.post("/scenarios/demo-week/baseline", headers=headers).json()
     entry = {
         "action": "approve",
         "recommendation_id": "rec-1",
@@ -20,8 +33,17 @@ def test_comparison_and_audit_endpoints():
         "reason": "",
         "plan": result["plan"],
     }
-    assert client.post("/scenarios/demo-week/decisions", json=entry).status_code == 201
-    assert client.get("/scenarios/demo-week/decisions/verify").json() == {"valid": True}
+    assert (
+        client.post(
+            "/scenarios/demo-week/decisions",
+            json=entry,
+            headers={**headers, "Idempotency-Key": "platform-1"},
+        ).status_code
+        == 201
+    )
+    assert client.get(
+        "/scenarios/demo-week/decisions/verify", headers=headers
+    ).json() == {"valid": True}
 
 
 def test_api_key_roles(monkeypatch):
@@ -60,13 +82,13 @@ def test_worker_claims_and_fences():
             self.claimed = True
             return type("J", (), {"id": "j"}) if not self.completed else None
 
-        def solve_job(self, job, owner):
+        def solve_job(self, job):
             return "ok"
 
-        def complete_job(self, job_id, owner, result):
+        def complete_job(self, job, result):
             self.completed = True
 
-        def fail_job(self, job_id, owner, error):
+        def fail_job(self, job, error):
             raise AssertionError(error)
 
     repo = Repo()
@@ -75,7 +97,12 @@ def test_worker_claims_and_fences():
     assert repo.completed
 
 
-def test_request_body_limit():
+def test_request_body_limit(monkeypatch):
+
+    monkeypatch.setenv(
+        "RR_API_KEYS",
+        json.dumps({"0" * 64: {"user": "u", "team": "demo", "role": "viewer"}}),
+    )
     client = TestClient(create_app())
     response = client.post(
         "/scenarios", content=b"x", headers={"content-length": str(2 * 1024 * 1024 + 1)}
