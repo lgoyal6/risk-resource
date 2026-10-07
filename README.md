@@ -29,3 +29,7 @@ Synthetic data generators and benchmarks must record their seed and provenance. 
 `migrations/001_initial.sql` defines tenant-scoped scenarios, idempotent jobs, recommendations, and immutable decisions. `adapters.postgres.PostgresRepository` applies numbered migrations and preserves the raw scenario JSON and content hash. `adapters.worker.JobWorker` is the lease/fencing seam for a Postgres-backed worker. Run the local stack with `docker compose -f infra/docker-compose.yml up --build`.
 
 Set `RR_API_KEYS` to a JSON map keyed by SHA-256 API-key digest, for example `{"<sha256>":{"user":"ops","team":"demo","role":"approver"}}`. Keys are never logged. `scripts/benchmark.py` prints a fixed seeded workload comparison with objective and elapsed time.
+
+## PostgreSQL verification
+
+With Docker available, run `scripts/verify_postgres.sh`. It starts the pinned PostgreSQL 16.4 service, waits for readiness, applies migrations, verifies scenario round-trip and tenant isolation, then removes the container and volume. Without `RR_POSTGRES_DSN`, the integration test is skipped rather than claiming coverage.
