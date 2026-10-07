@@ -73,3 +73,11 @@ def test_worker_claims_and_fences():
     worker = JobWorker(repo, "w")
     assert worker.run_once()
     assert repo.completed
+
+
+def test_request_body_limit():
+    client = TestClient(create_app())
+    response = client.post(
+        "/scenarios", content=b"x", headers={"content-length": str(2 * 1024 * 1024 + 1)}
+    )
+    assert response.status_code == 413

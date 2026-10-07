@@ -18,6 +18,18 @@ from risk_resource.transport.auth import Principal, principal, require_role
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Risk Resource", version="0.1.0")
+
+    @app.middleware("http")
+    async def request_size_limit(request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > 2 * 1024 * 1024:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                {"detail": "request body exceeds 2 MiB"}, status_code=413
+            )
+        return await call_next(request)
+
     ui = Path(__file__).parent / "static" / "index.html"
 
     @app.get("/", include_in_schema=False)
