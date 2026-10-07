@@ -33,3 +33,5 @@ Set `RR_API_KEYS` to a JSON map keyed by SHA-256 API-key digest, for example `{"
 ## PostgreSQL verification
 
 With Docker available, run `scripts/verify_postgres.sh`. It starts the pinned PostgreSQL 16.4 service, waits for readiness, applies migrations, verifies scenario round-trip and tenant isolation, then removes the container and volume. Without `RR_POSTGRES_DSN`, the integration test is skipped rather than claiming coverage.
+
+The full Compose smoke test builds the API image, waits for PostgreSQL health, runs startup migrations, and confirms `GET /health` before teardown.
