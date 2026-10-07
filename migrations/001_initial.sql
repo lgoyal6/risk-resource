@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS schema_migrations(version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS scenarios(id text PRIMARY KEY, team text NOT NULL, name text NOT NULL, provenance text NOT NULL, raw_json jsonb NOT NULL, content_sha256 text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS jobs(id uuid PRIMARY KEY, scenario_id text NOT NULL REFERENCES scenarios(id), team text NOT NULL, status text NOT NULL CHECK(status IN ('queued','running','succeeded','failed','cancelled')), request_hash text NOT NULL, attempts int NOT NULL DEFAULT 0, max_attempts int NOT NULL DEFAULT 3, lease_owner text, lease_expires_at timestamptz, cancel_requested boolean NOT NULL DEFAULT false, error text, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_team_request_hash ON jobs(team, request_hash);
+CREATE TABLE IF NOT EXISTS recommendations(id uuid PRIMARY KEY, job_id uuid UNIQUE NOT NULL REFERENCES jobs(id), scenario_id text NOT NULL REFERENCES scenarios(id), plan_json jsonb NOT NULL, evaluation_json jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS decisions(id bigserial PRIMARY KEY, scenario_id text NOT NULL REFERENCES scenarios(id), action text NOT NULL, recommendation_id uuid, actor text NOT NULL, reason text NOT NULL, plan_json jsonb, previous_hash text NOT NULL, hash text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE OR REPLACE FUNCTION deny_decision_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'decisions are append-only'; END $$;
+DROP TRIGGER IF EXISTS decisions_immutable ON decisions;
+CREATE TRIGGER decisions_immutable BEFORE UPDATE OR DELETE ON decisions FOR EACH ROW EXECUTE FUNCTION deny_decision_mutation();

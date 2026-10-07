@@ -1,0 +1,11 @@
+services:
+  postgres:
+    image: postgres:16.4
+    environment: {POSTGRES_DB: risk_resource, POSTGRES_USER: risk_resource, POSTGRES_PASSWORD: risk_resource}
+    ports: ["5432:5432"]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U risk_resource"], interval: 5s, timeout: 3s, retries: 10}
+  api:
+    build: ..
+    environment: {DATABASE_URL: postgresql://risk_resource:risk_resource@postgres:5432/risk_resource}
+    ports: ["8000:8000"]
+    depends_on: {postgres: {condition: service_healthy}}

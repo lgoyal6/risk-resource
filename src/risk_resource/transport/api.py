@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 from risk_resource.adapters.cp_sat import CpSatSolver
 from risk_resource.application.services import SolveService, scenario_hash
@@ -10,10 +13,17 @@ from risk_resource.domain.decisions import (
 )
 from risk_resource.domain.models import Plan, Scenario
 from risk_resource.sample import demo_scenario
+from risk_resource.transport.auth import Principal, principal, require_role
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Risk Resource", version="0.1.0")
+    ui = Path(__file__).parent / "static" / "index.html"
+
+    @app.get("/", include_in_schema=False)
+    def index():
+        return FileResponse(ui)
+
     service = SolveService(CpSatSolver())
     scenarios: dict[str, Scenario] = {"demo-week": demo_scenario()}
     decisions: dict[str, list[DecisionEntry]] = {}
@@ -30,7 +40,8 @@ def create_app() -> FastAPI:
         ]
 
     @app.post("/scenarios", status_code=201)
-    def create_scenario(scenario: Scenario):
+    def create_scenario(scenario: Scenario, p: Principal = Depends(principal)):  # noqa: B008
+        require_role(p, "planner")
         if scenario.id in scenarios:
             raise HTTPException(409, "scenario already exists")
         scenarios[scenario.id] = scenario
@@ -43,7 +54,8 @@ def create_app() -> FastAPI:
         return scenarios[scenario_id]
 
     @app.post("/scenarios/{scenario_id}/baseline")
-    def baseline(scenario_id: str):
+    def baseline(scenario_id: str, p: Principal = Depends(principal)):  # noqa: B008
+        require_role(p, "viewer")
         if scenario_id not in scenarios:
             raise HTTPException(404, "scenario not found")
         return service.baseline(scenarios[scenario_id])
@@ -67,7 +79,8 @@ def create_app() -> FastAPI:
         return {"valid": verify_decisions(tuple(decisions.get(scenario_id, [])))[0]}
 
     @app.post("/scenarios/{scenario_id}/decisions", status_code=201)
-    def decide(scenario_id: str, entry: dict):
+    def decide(scenario_id: str, entry: dict, p: Principal = Depends(principal)):  # noqa: B008
+        require_role(p, "approver")
         if scenario_id not in scenarios:
             raise HTTPException(404, "scenario not found")
         plan = Plan.model_validate(entry["plan"]) if entry.get("plan") else None
@@ -88,7 +101,8 @@ def create_app() -> FastAPI:
         return created
 
     @app.post("/scenarios/{scenario_id}/solve")
-    def solve(scenario_id: str):
+    def solve(scenario_id: str, p: Principal = Depends(principal)):  # noqa: B008
+        require_role(p, "planner")
         if scenario_id not in scenarios:
             raise HTTPException(404, "scenario not found")
         result = service.optimized(scenarios[scenario_id])
