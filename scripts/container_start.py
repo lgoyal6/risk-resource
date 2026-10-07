@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import os
+
 from risk_resource.adapters.postgres import PostgresRepository
 
 if __name__ == "__main__":

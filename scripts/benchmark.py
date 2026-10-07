@@ -1,9 +1,11 @@
 """Reproducible local benchmark for named demo workload."""
 from time import perf_counter
-from risk_resource.sample import demo_scenario
+
 from risk_resource.adapters.cp_sat import CpSatSolver
-from risk_resource.domain.greedy import greedy_plan
 from risk_resource.domain.checker import evaluate_plan
+from risk_resource.domain.greedy import greedy_plan
+from risk_resource.sample import demo_scenario
+
 
 def main():
     scenario = demo_scenario(); start = perf_counter(); baseline = evaluate_plan(scenario, greedy_plan(scenario)); baseline_ms = (perf_counter()-start)*1000
