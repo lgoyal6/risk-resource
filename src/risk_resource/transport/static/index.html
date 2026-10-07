@@ -1,1 +1,17 @@
-<!doctype html><meta charset="utf-8"><title>Risk Resource</title><style>body{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 20px}button{padding:8px}pre{background:#f4f4f4;padding:16px;border-radius:8px}</style><h1>Risk Resource</h1><p>Preventive GPU maintenance planning. Demo data is synthetic.</p><button id="run">Compare baseline and optimized plan</button><pre id="out"></pre><script>run.onclick=async()=>{out.textContent=JSON.stringify(await (await fetch('/scenarios/demo-week/compare')).json(),null,2)}</script>
+<!doctype html>
+<meta charset="utf-8"><title>Risk Resource</title>
+<style>body{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 20px}button,input{padding:8px}pre{background:#f4f4f4;padding:16px;border-radius:8px}</style>
+<h1>Risk Resource</h1><p>Preventive GPU maintenance planning. Demo data is synthetic.</p>
+<label>API key <input id="key" type="password" autocomplete="off"></label>
+<p>The key stays in this page's memory and is cleared when you reload.</p>
+<button id="run">Compare baseline and optimized plan</button><pre id="out"></pre>
+<script>
+document.getElementById('run').onclick=async()=>{
+  const out=document.getElementById('out');
+  try {
+    const response=await fetch('/scenarios/demo-week/compare',{headers:{'X-API-Key':document.getElementById('key').value}});
+    const body=await response.json();
+    out.textContent=(response.ok?'':'Request failed ('+response.status+')\n')+JSON.stringify(body,null,2);
+  } catch(error) {out.textContent='Could not connect to the service.';}
+};
+</script>

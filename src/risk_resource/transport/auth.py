@@ -19,7 +19,7 @@ class Principal:
 def principal(x_api_key: str | None = Header(default=None)) -> Principal:
     config = json.loads(os.getenv("RR_API_KEYS", "{}"))
     if not config:
-        return Principal("local", "demo", "approver")
+        raise HTTPException(503, "RR_API_KEYS is not configured")
     if not x_api_key:
         raise HTTPException(401, "API key required")
     digest = hashlib.sha256(x_api_key.encode()).hexdigest()
