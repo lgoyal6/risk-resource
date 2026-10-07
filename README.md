@@ -35,3 +35,11 @@ Set `RR_API_KEYS` to a JSON map keyed by SHA-256 API-key digest, for example `{"
 With Docker available, run `scripts/verify_postgres.sh`. It starts the pinned PostgreSQL 16.4 service, waits for readiness, applies migrations, verifies scenario round-trip and tenant isolation, then removes the container and volume. Without `RR_POSTGRES_DSN`, the integration test is skipped rather than claiming coverage.
 
 The full Compose smoke test builds the API image, waits for PostgreSQL health, runs startup migrations, and confirms `GET /health` before teardown.
+
+### Security and worker verification
+
+Protected API requests require `X-API-Key`, configured through a JSON map of token SHA-256 digests in `RR_API_KEYS`. Roles and team membership come from configuration. Approval actors come from the authenticated user, and `Idempotency-Key` binds retries to the exact decision and actor. Identical retries return 200; conflicting reuse returns 409. The browser demo accepts a key in memory rather than storing it in browser storage.
+
+Run `bash scripts/verify_postgres.sh` to test actual worker claims, recommendation persistence, retry backoff, cancellation, expired-worker fencing, rollback, and append-only audit protection. The gate uses a uniquely owned database container with a temporary loopback port, creates isolated schemas per test, and cleans up on exit.
+
+The reference HTTP API remains in memory. `DATABASE_URL` does not enable persistent HTTP approvals. PostgreSQL worker verification does not establish production deployment, availability, or a complete persistent API workflow.

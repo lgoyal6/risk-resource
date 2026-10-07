@@ -6,6 +6,8 @@ services:
     healthcheck: {test: ["CMD-SHELL", "pg_isready -U risk_resource"], interval: 5s, timeout: 3s, retries: 10}
   api:
     build: ..
-    environment: {DATABASE_URL: postgresql://risk_resource:risk_resource@postgres:5432/risk_resource}
+    environment:
+      DATABASE_URL: postgresql://risk_resource:risk_resource@postgres:5432/risk_resource
+      RR_API_KEYS: ${RR_API_KEYS:?set a JSON map of SHA-256 API-key digests}
     ports: ["8000:8000"]
     depends_on: {postgres: {condition: service_healthy}}
