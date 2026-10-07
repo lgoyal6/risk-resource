@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 from risk_resource.adapters.cp_sat import CpSatSolver
 
 from .checker import evaluate_plan
@@ -24,7 +22,7 @@ def sensitivity(scenario: Scenario, risk_weights: tuple[float, ...] = (0.5, 1.0,
         {
             "risk_weight": weight,
             "objective_cents": CpSatSolver()
-            .solve(replace(scenario, risk_weight=weight))
+            .solve(scenario.model_copy(update={"risk_weight": weight}))
             .evaluation.objective_cents,
         }
         for weight in risk_weights
