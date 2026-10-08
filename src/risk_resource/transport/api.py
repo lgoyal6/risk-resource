@@ -1,4 +1,5 @@
 import json
+import os
 from hashlib import sha256
 from pathlib import Path
 from threading import RLock
@@ -9,6 +10,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from risk_resource.adapters.cp_sat import CpSatSolver
+from risk_resource.adapters.postgres import PostgresRepository
 from risk_resource.application.services import SolveService, scenario_hash
 from risk_resource.domain.compare import compare, sensitivity
 from risk_resource.domain.decisions import (
@@ -73,8 +75,20 @@ def create_app() -> FastAPI:
     decisions: dict[str, list[DecisionEntry]] = {}
     decision_keys: dict[tuple[str, str, str], tuple[str, DecisionEntry]] = {}
     lock = RLock()
+    database = os.getenv("DATABASE_URL")
+    persistent = None
+    if database:
+        persistent = PostgresRepository(database, service)
+        persistent.open()
+        persistent.migrate()
+        if persistent.get_scenario("demo-week", "demo") is None:
+            persistent.save_scenario(demo_scenario(), "demo")
 
     def owned(scenario_id: str, p: Principal) -> Scenario:
+        if persistent:
+            scenario = persistent.get_scenario(scenario_id, p.team)
+            if scenario is None: raise HTTPException(404, "scenario not found")
+            return scenario
         scenario = scenarios.get(scenario_id)
         if scenario is None or scenario_teams.get(scenario_id) != p.team:
             raise HTTPException(404, "scenario not found")
@@ -87,6 +101,8 @@ def create_app() -> FastAPI:
     @app.get("/scenarios")
     def list_scenarios(p: Principal = Depends(principal)):  # noqa: B008
         require_role(p, "viewer")
+        if persistent:
+            return [{"id": s.id, "name": s.name, "provenance": s.provenance} for s in persistent.list_scenarios(p.team)]
         with lock:
             return [
                 {"id": s.id, "name": s.name, "provenance": s.provenance}
@@ -97,6 +113,10 @@ def create_app() -> FastAPI:
     @app.post("/scenarios", status_code=201)
     def create_scenario(scenario: Scenario, p: Principal = Depends(principal)):  # noqa: B008
         require_role(p, "planner")
+        if persistent:
+            if persistent.get_scenario(scenario.id, p.team) is not None: raise HTTPException(409, "scenario already exists")
+            persistent.save_scenario(scenario, p.team)
+            return {"id": scenario.id, "sha256": scenario_hash(scenario)}
         with lock:
             if scenario.id in scenarios:
                 raise HTTPException(409, "scenario already exists")
@@ -176,7 +196,11 @@ def create_app() -> FastAPI:
     @app.post("/scenarios/{scenario_id}/solve")
     def solve(scenario_id: str, p: Principal = Depends(principal)):  # noqa: B008
         require_role(p, "planner")
-        result = service.optimized(owned(scenario_id, p))
+        scenario = owned(scenario_id, p)
+        if persistent:
+            job = persistent.enqueue_job(scenario.id, p.team, scenario_hash(scenario))
+            return {"status": "queued", "job_id": str(job), "scenario_id": scenario.id}
+        result = service.optimized(scenario)
         if not result.evaluation.feasible:
             raise HTTPException(
                 422,
