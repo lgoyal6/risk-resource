@@ -61,6 +61,11 @@ class PostgresRepository:
             ).fetchone()
         return Scenario.model_validate(row[0]) if row else None
 
+    def list_scenarios(self, team: str) -> list[Scenario]:
+        with self.pool.connection() as conn:
+            rows = conn.execute("SELECT raw_json FROM scenarios WHERE team=%s ORDER BY created_at,id", (team,)).fetchall()
+        return [Scenario.model_validate(row[0]) for row in rows]
+
     def enqueue_job(
         self, scenario_id: str, team: str, request_hash: str, max_attempts: int = 3
     ) -> UUID:
