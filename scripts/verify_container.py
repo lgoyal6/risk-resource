@@ -60,8 +60,23 @@ try:
     assert request(port, "GET", "/scenarios/demo-week", token="other-token")[0] == 404
     assert request(port, "POST", "/scenarios/demo-week/solve", token="viewer-token")[0] == 403
     status, solve = request(port, "POST", "/scenarios/demo-week/solve", token="approver-token")
-    assert status == 200 and solve["evaluation"]["feasible"]
-    body = {"action": "approve", "recommendation_id": "gate", "plan": solve["plan"], "actor": "spoof"}
+    assert status == 200 and solve["status"] == "queued"
+    # The persistent API returns a job, so exercise the same worker boundary a
+    # deployment uses before reading the recommendation for approval.
+    docker(
+        "exec", name, ".venv/bin/python", "-c",
+        "import os; from risk_resource.adapters.postgres import PostgresRepository; "
+        "from risk_resource.adapters.worker import JobWorker; "
+        "r=PostgresRepository(os.environ['DATABASE_URL']); r.open(); r.migrate(); "
+        "JobWorker(r, 'container-gate').run_once(); r.close()",
+    )
+    status, completed = request(
+        port, "GET", f"/scenarios/demo-week/jobs/{solve['job_id']}", token="approver-token"
+    )
+    assert status == 200 and completed["job"]["status"] == "succeeded"
+    recommendation = completed["recommendation"]
+    assert recommendation["evaluation"]["feasible"]
+    body = {"action": "approve", "recommendation_id": recommendation["id"], "plan": recommendation["plan"], "actor": "spoof"}
     path = "/scenarios/demo-week/decisions"
     status, decision = request(port, "POST", path, body, "approver-token", "retry-key")
     assert status == 201 and decision["actor"] == "approver-token"
@@ -69,7 +84,7 @@ try:
     assert status == 200 and replay == decision
     body["reason"] = "changed request"
     assert request(port, "POST", path, body, "approver-token", "retry-key")[0] == 409
-    assert docker("exec", database, "psql", "-U", "postgres", "-d", "gate", "-Atc", "select count(*) from schema_migrations") == "2"
+    assert docker("exec", database, "psql", "-U", "postgres", "-d", "gate", "-Atc", "select count(*) from schema_migrations") == "3"
     print("Container verified: migrations, roles, team isolation, actor binding, idempotent decisions")
 except Exception:
     subprocess.run(["docker", "logs", name], check=False)

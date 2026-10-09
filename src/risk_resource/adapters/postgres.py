@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from psycopg_pool import ConnectionPool
+from psycopg.types.json import Jsonb
 
 from risk_resource.adapters.cp_sat import CpSatSolver
 from risk_resource.adapters.worker import JobLease
@@ -188,6 +189,19 @@ class PostgresRepository:
             return None
         return {"id": str(row[0]), "job_id": str(row[1]), "scenario_id": row[2], "plan": row[3], "evaluation": row[4]}
 
+    def recommendation_for_job(self, job_id: str, scenario_id: str, team: str):
+        """Return the durable result attached to a job, scoped to its team."""
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "SELECT r.id,r.job_id,r.scenario_id,r.plan_json,r.evaluation_json "
+                "FROM recommendations r JOIN scenarios s ON s.id=r.scenario_id "
+                "WHERE r.job_id=%s AND r.scenario_id=%s AND s.team=%s",
+                (job_id, scenario_id, team),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"id": str(row[0]), "job_id": str(row[1]), "scenario_id": row[2], "plan": row[3], "evaluation": row[4]}
+
     def job(self, job_id: str, scenario_id: str, team: str):
         with self.pool.connection() as conn:
             row = conn.execute("SELECT id,scenario_id,status,attempts,error FROM jobs WHERE id=%s AND scenario_id=%s AND team=%s", (job_id, scenario_id, team)).fetchone()
@@ -200,10 +214,34 @@ class PostgresRepository:
             rows = conn.execute("SELECT d.action,d.recommendation_id,d.actor,d.reason,d.plan_json,d.previous_hash,d.hash FROM decisions d JOIN scenarios s ON s.id=d.scenario_id WHERE d.scenario_id=%s AND s.team=%s ORDER BY d.id", (scenario_id, team)).fetchall()
         return [DecisionEntry(r[0], str(r[1]) if r[1] else "", r[2], r[3], Plan.model_validate(r[4]) if r[4] else None, r[5], r[6]) for r in rows]
 
-    def append_decision(self, scenario: Scenario, team: str, entry: DecisionEntry) -> DecisionEntry:
+    def append_decision(
+        self,
+        scenario: Scenario,
+        team: str,
+        entry: DecisionEntry,
+        idempotency_key: str | None = None,
+        request_hash: str | None = None,
+    ) -> tuple[DecisionEntry, bool]:
         with self.pool.connection() as conn:
             # The row lock makes previous_hash and the append-only hash chain linear.
             conn.execute("SELECT id FROM scenarios WHERE id=%s AND team=%s FOR UPDATE", (scenario.id, team))
+            if idempotency_key is not None:
+                if not request_hash:
+                    raise ValueError("request hash is required with an idempotency key")
+                prior = conn.execute(
+                    "SELECT request_hash,decision_hash FROM decision_idempotency WHERE team=%s AND scenario_id=%s AND idempotency_key=%s",
+                    (team, scenario.id, idempotency_key),
+                ).fetchone()
+                if prior:
+                    if prior[0] != request_hash:
+                        raise ValueError("idempotency key reused for a different decision")
+                    row = conn.execute(
+                        "SELECT action,recommendation_id,actor,reason,plan_json,previous_hash,hash FROM decisions WHERE scenario_id=%s AND hash=%s",
+                        (scenario.id, prior[1]),
+                    ).fetchone()
+                    if row is None:
+                        raise RuntimeError("decision idempotency record has no decision")
+                    return self._decision_entry(row), False
             prior = conn.execute("SELECT hash FROM decisions WHERE scenario_id=%s ORDER BY id DESC LIMIT 1", (scenario.id,)).fetchone()
             if (prior[0] if prior else "") != entry.previous_hash:
                 raise ValueError("decision chain changed; retry the command")
@@ -215,5 +253,21 @@ class PostgresRepository:
                     raise ValueError("recommendation_id must reference a persisted recommendation")
             if rec and self.recommendation(str(rec), scenario.id, team) is None:
                 raise ValueError("recommendation does not belong to this scenario")
-            conn.execute("INSERT INTO decisions(scenario_id,action,recommendation_id,actor,reason,plan_json,previous_hash,hash) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (scenario.id,entry.action,rec,entry.actor,entry.reason,entry.plan.model_dump(mode="json") if entry.plan else None,entry.previous_hash,entry.hash))
-            return entry
+            conn.execute("INSERT INTO decisions(scenario_id,action,recommendation_id,actor,reason,plan_json,previous_hash,hash) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (scenario.id,entry.action,rec,entry.actor,entry.reason,Jsonb(entry.plan.model_dump(mode="json")) if entry.plan else None,entry.previous_hash,entry.hash))
+            if idempotency_key is not None:
+                conn.execute(
+                    "INSERT INTO decision_idempotency(team,scenario_id,idempotency_key,request_hash,decision_hash) VALUES(%s,%s,%s,%s,%s)",
+                    (team, scenario.id, idempotency_key, request_hash, entry.hash),
+                )
+            return entry, True
+
+    @staticmethod
+    def _decision_entry(row) -> DecisionEntry:
+        from risk_resource.domain.models import Plan
+
+        recommendation_id = str(row[1]) if row[1] else ""
+        return DecisionEntry(
+            row[0], recommendation_id, row[2], row[3],
+            Plan.model_validate(row[4]) if row[4] else None,
+            row[5], row[6],
+        )

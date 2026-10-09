@@ -68,6 +68,9 @@ def test_actual_worker_persists_recommendation_and_success_together(repository):
     assert row[0] == "succeeded"
     assert row[1]["assignments"]
     assert row[2]["feasible"]
+    recommendation = repository.recommendation_for_job(str(jid), "demo-week", "demo")
+    assert recommendation is not None
+    assert recommendation["job_id"] == str(jid)
     assert not JobWorker(repository, "worker").run_once()
 
 
