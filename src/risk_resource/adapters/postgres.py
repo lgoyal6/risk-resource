@@ -9,6 +9,7 @@ from psycopg_pool import ConnectionPool
 from risk_resource.adapters.cp_sat import CpSatSolver
 from risk_resource.adapters.worker import JobLease
 from risk_resource.application.services import SolveService, scenario_hash
+from risk_resource.domain.decisions import DecisionEntry
 from risk_resource.domain.models import Scenario, SolveResult
 
 
@@ -179,3 +180,40 @@ class PostgresRepository:
                 ).rowcount
                 == 1
             )
+
+    def recommendation(self, recommendation_id: str, scenario_id: str, team: str):
+        with self.pool.connection() as conn:
+            row = conn.execute("SELECT r.id,r.job_id,r.scenario_id,r.plan_json,r.evaluation_json FROM recommendations r JOIN scenarios s ON s.id=r.scenario_id WHERE r.id=%s AND r.scenario_id=%s AND s.team=%s", (recommendation_id, scenario_id, team)).fetchone()
+        if row is None:
+            return None
+        return {"id": str(row[0]), "job_id": str(row[1]), "scenario_id": row[2], "plan": row[3], "evaluation": row[4]}
+
+    def job(self, job_id: str, scenario_id: str, team: str):
+        with self.pool.connection() as conn:
+            row = conn.execute("SELECT id,scenario_id,status,attempts,error FROM jobs WHERE id=%s AND scenario_id=%s AND team=%s", (job_id, scenario_id, team)).fetchone()
+        return {"id": str(row[0]), "scenario_id": row[1], "status": row[2], "attempts": row[3], "error": row[4]} if row else None
+
+    def decisions(self, scenario_id: str, team: str) -> list[DecisionEntry]:
+        from risk_resource.domain.decisions import DecisionEntry
+        from risk_resource.domain.models import Plan
+        with self.pool.connection() as conn:
+            rows = conn.execute("SELECT d.action,d.recommendation_id,d.actor,d.reason,d.plan_json,d.previous_hash,d.hash FROM decisions d JOIN scenarios s ON s.id=d.scenario_id WHERE d.scenario_id=%s AND s.team=%s ORDER BY d.id", (scenario_id, team)).fetchall()
+        return [DecisionEntry(r[0], str(r[1]) if r[1] else "", r[2], r[3], Plan.model_validate(r[4]) if r[4] else None, r[5], r[6]) for r in rows]
+
+    def append_decision(self, scenario: Scenario, team: str, entry: DecisionEntry) -> DecisionEntry:
+        with self.pool.connection() as conn:
+            # The row lock makes previous_hash and the append-only hash chain linear.
+            conn.execute("SELECT id FROM scenarios WHERE id=%s AND team=%s FOR UPDATE", (scenario.id, team))
+            prior = conn.execute("SELECT hash FROM decisions WHERE scenario_id=%s ORDER BY id DESC LIMIT 1", (scenario.id,)).fetchone()
+            if (prior[0] if prior else "") != entry.previous_hash:
+                raise ValueError("decision chain changed; retry the command")
+            rec = None
+            try:
+                rec = UUID(entry.recommendation_id)
+            except ValueError:
+                if entry.action != "reject":
+                    raise ValueError("recommendation_id must reference a persisted recommendation")
+            if rec and self.recommendation(str(rec), scenario.id, team) is None:
+                raise ValueError("recommendation does not belong to this scenario")
+            conn.execute("INSERT INTO decisions(scenario_id,action,recommendation_id,actor,reason,plan_json,previous_hash,hash) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (scenario.id,entry.action,rec,entry.actor,entry.reason,entry.plan.model_dump(mode="json") if entry.plan else None,entry.previous_hash,entry.hash))
+            return entry
