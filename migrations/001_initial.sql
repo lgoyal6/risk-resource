@@ -7,3 +7,4 @@ CREATE TABLE IF NOT EXISTS decisions(id bigserial PRIMARY KEY, scenario_id text 
 CREATE OR REPLACE FUNCTION deny_decision_mutation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'decisions are append-only'; END $$;
 DROP TRIGGER IF EXISTS decisions_immutable ON decisions;
 CREATE TRIGGER decisions_immutable BEFORE UPDATE OR DELETE ON decisions FOR EACH ROW EXECUTE FUNCTION deny_decision_mutation();
+CREATE UNIQUE INDEX IF NOT EXISTS decisions_scenario_hash ON decisions(scenario_id, hash);

@@ -43,3 +43,14 @@ Protected API requests require `X-API-Key`, configured through a JSON map of tok
 Run `bash scripts/verify_postgres.sh` to test actual worker claims, recommendation persistence, retry backoff, cancellation, expired-worker fencing, rollback, and append-only audit protection. The gate uses a uniquely owned database container with a temporary loopback port, creates isolated schemas per test, and cleans up on exit.
 
 The reference HTTP API remains in memory. `DATABASE_URL` does not enable persistent HTTP approvals. PostgreSQL worker verification does not establish production deployment, availability, or a complete persistent API workflow.
+
+
+## Durable API mode
+
+Set `DATABASE_URL` to enable PostgreSQL-backed scenarios, solve jobs, recommendations,
+and append-only approval decisions. `POST /scenarios/{id}/solve` returns a job id; run
+`python -m risk_resource.adapters.worker` or embed `JobWorker` to claim and solve it,
+then poll `GET /scenarios/{id}/jobs/{job_id}`. Approval requires a recommendation UUID
+from that scenario and the authenticated team. Decision history and hash verification
+read PostgreSQL after an API restart. Job cancellation is team-scoped and fenced against
+in-flight workers. The API process closes its connection pool at shutdown.

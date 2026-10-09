@@ -144,11 +144,19 @@ def create_app() -> FastAPI:
         require_role(p, "viewer")
         return sensitivity(owned(scenario_id, p))
 
+    @app.get("/scenarios/{scenario_id}/decisions")
+    def decision_history(scenario_id: str, p: Principal = Depends(principal)):
+        require_role(p, "viewer")
+        owned(scenario_id, p)
+        entries = persistent.decisions(scenario_id, p.team) if persistent else decisions.get(scenario_id, [])
+        return list(entries)
+
     @app.get("/scenarios/{scenario_id}/decisions/verify")
     def verify(scenario_id: str, p: Principal = Depends(principal)):  # noqa: B008
         require_role(p, "viewer")
         owned(scenario_id, p)
-        return {"valid": verify_decisions(tuple(decisions.get(scenario_id, [])))[0]}
+        entries = persistent.decisions(scenario_id, p.team) if persistent else decisions.get(scenario_id, [])
+        return {"valid": verify_decisions(tuple(entries))[0]}
 
     @app.post("/scenarios/{scenario_id}/decisions", status_code=201)
     def decide(
@@ -163,6 +171,13 @@ def create_app() -> FastAPI:
         if not idempotency_key or len(idempotency_key) > 128:
             raise HTTPException(400, "Idempotency-Key must be 1..128 characters")
         key = (p.team, scenario_id, idempotency_key)
+        if persistent and entry.action != "reject":
+            try:
+                recommendation = persistent.recommendation(entry.recommendation_id, scenario_id, p.team)
+            except ValueError:
+                recommendation = None
+            if recommendation is None:
+                raise HTTPException(422, "recommendation must be a persisted result for this scenario")
         payload = {**entry.model_dump(mode="json", exclude={"actor"}), "actor": p.user}
         digest = sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -178,8 +193,9 @@ def create_app() -> FastAPI:
                 response.status_code = 200
                 return prior
             try:
+                existing = persistent.decisions(scenario_id, p.team) if persistent else decisions.get(scenario_id, [])
                 created = append_decision(
-                    tuple(decisions.get(scenario_id, [])),
+                    tuple(existing),
                     action=entry.action,
                     recommendation_id=entry.recommendation_id,
                     actor=p.user,
@@ -189,9 +205,33 @@ def create_app() -> FastAPI:
                 )
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
-            decisions.setdefault(scenario_id, []).append(created)
-            decision_keys[key] = (digest, created)
+            if persistent:
+                try:
+                    persistent.append_decision(scenario, p.team, created)
+                except ValueError as exc:
+                    raise HTTPException(409, str(exc)) from exc
+            else:
+                decisions.setdefault(scenario_id, []).append(created)
+                decision_keys[key] = (digest, created)
             return created
+
+    @app.get("/scenarios/{scenario_id}/jobs/{job_id}")
+    def job_status(scenario_id: str, job_id: str, p: Principal = Depends(principal)):
+        require_role(p, "viewer")
+        owned(scenario_id, p)
+        if not persistent:
+            raise HTTPException(404, "persistent jobs are disabled")
+        job = persistent.job(job_id, scenario_id, p.team)
+        if job is None: raise HTTPException(404, "job not found")
+        recommendation = persistent.recommendation(str(job["id"]), scenario_id, p.team) if job["status"] == "succeeded" else None
+        return {"job": job, "recommendation": recommendation}
+
+    @app.post("/scenarios/{scenario_id}/jobs/{job_id}/cancel")
+    def cancel_job(scenario_id: str, job_id: str, p: Principal = Depends(principal)):
+        require_role(p, "planner")
+        owned(scenario_id, p)
+        if not persistent: raise HTTPException(404, "persistent jobs are disabled")
+        return {"cancelled": persistent.cancel_job(__import__("uuid").UUID(job_id), p.team)}
 
     @app.post("/scenarios/{scenario_id}/solve")
     def solve(scenario_id: str, p: Principal = Depends(principal)):  # noqa: B008
@@ -211,6 +251,10 @@ def create_app() -> FastAPI:
             )
         return result
 
+    if persistent:
+        @app.on_event("shutdown")
+        def close_database():
+            persistent.close()
     return app
 
 
