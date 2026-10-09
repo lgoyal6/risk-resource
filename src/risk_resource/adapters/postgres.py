@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from psycopg_pool import ConnectionPool
 from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 
 from risk_resource.adapters.cp_sat import CpSatSolver
 from risk_resource.adapters.worker import JobLease

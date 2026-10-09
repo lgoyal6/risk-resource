@@ -145,7 +145,7 @@ def create_app() -> FastAPI:
         return sensitivity(owned(scenario_id, p))
 
     @app.get("/scenarios/{scenario_id}/decisions")
-    def decision_history(scenario_id: str, p: Principal = Depends(principal)):
+    def decision_history(scenario_id: str, p: Principal = Depends(principal)):  # noqa: B008
         require_role(p, "viewer")
         owned(scenario_id, p)
         entries = persistent.decisions(scenario_id, p.team) if persistent else decisions.get(scenario_id, [])
@@ -219,7 +219,7 @@ def create_app() -> FastAPI:
             return created
 
     @app.get("/scenarios/{scenario_id}/jobs/{job_id}")
-    def job_status(scenario_id: str, job_id: str, p: Principal = Depends(principal)):
+    def job_status(scenario_id: str, job_id: str, p: Principal = Depends(principal)):  # noqa: B008
         require_role(p, "viewer")
         owned(scenario_id, p)
         if not persistent:
@@ -230,7 +230,7 @@ def create_app() -> FastAPI:
         return {"job": job, "recommendation": recommendation}
 
     @app.post("/scenarios/{scenario_id}/jobs/{job_id}/cancel")
-    def cancel_job(scenario_id: str, job_id: str, p: Principal = Depends(principal)):
+    def cancel_job(scenario_id: str, job_id: str, p: Principal = Depends(principal)):  # noqa: B008
         require_role(p, "planner")
         owned(scenario_id, p)
         if not persistent: raise HTTPException(404, "persistent jobs are disabled")
