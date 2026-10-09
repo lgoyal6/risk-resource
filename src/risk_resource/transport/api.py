@@ -207,9 +207,12 @@ def create_app() -> FastAPI:
                 raise HTTPException(422, str(exc)) from exc
             if persistent:
                 try:
-                    persistent.append_decision(scenario, p.team, created)
+                    created, was_created = persistent.append_decision(
+                        scenario, p.team, created, idempotency_key, digest
+                    )
                 except ValueError as exc:
                     raise HTTPException(409, str(exc)) from exc
+                response.status_code = 201 if was_created else 200
             else:
                 decisions.setdefault(scenario_id, []).append(created)
                 decision_keys[key] = (digest, created)
@@ -223,7 +226,7 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "persistent jobs are disabled")
         job = persistent.job(job_id, scenario_id, p.team)
         if job is None: raise HTTPException(404, "job not found")
-        recommendation = persistent.recommendation(str(job["id"]), scenario_id, p.team) if job["status"] == "succeeded" else None
+        recommendation = persistent.recommendation_for_job(str(job["id"]), scenario_id, p.team) if job["status"] == "succeeded" else None
         return {"job": job, "recommendation": recommendation}
 
     @app.post("/scenarios/{scenario_id}/jobs/{job_id}/cancel")
