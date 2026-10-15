@@ -10,7 +10,9 @@ from psycopg.conninfo import make_conninfo
 
 from risk_resource.adapters.postgres import PostgresRepository
 from risk_resource.adapters.worker import JobWorker
+from risk_resource.domain.models import Plan
 from risk_resource.sample import demo_scenario
+from risk_resource.synthetic import fleet_scenario
 
 pytestmark = pytest.mark.integration
 
@@ -72,6 +74,70 @@ def test_actual_worker_persists_recommendation_and_success_together(repository):
     assert recommendation is not None
     assert recommendation["job_id"] == str(jid)
     assert not JobWorker(repository, "worker").run_once()
+
+
+def test_worker_loss_after_solve_redelivers_once(repository):
+    jid = seed(repository)
+    lost = repository.claim_job("lost-worker", 60)
+    solved_but_not_committed = repository.solve_job(lost)
+    expire(repository, jid)
+
+    replacement = repository.claim_job("replacement-worker", 60)
+    assert replacement.attempt == lost.attempt + 1
+    assert not repository.complete_job(lost, solved_but_not_committed)
+    assert repository.complete_job(replacement, repository.solve_job(replacement))
+    assert not repository.complete_job(replacement, solved_but_not_committed)
+    with repository.pool.connection() as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM recommendations WHERE job_id=%s", (jid,)
+        ).fetchone()[0] == 1
+
+
+def test_mandatory_infeasible_job_is_diagnosed_without_recommendation(repository):
+    scenario = fleet_scenario(45001, orders=8, infeasible="capacity")
+    repository.save_scenario(scenario, "demo")
+    jid = repository.enqueue_job(scenario.id, "demo", "infeasible")
+    assert JobWorker(repository, "worker").run_once()
+    job = repository.job(str(jid), scenario.id, "demo")
+    assert job["status"] == "infeasible"
+    assert job["diagnosis"]["kind"] == "Infeasible"
+    assert not repository.recommendation_for_job(str(jid), scenario.id, "demo")
+
+
+def test_invalid_solver_plan_is_rejected_by_checker(repository):
+    jid = seed(repository)
+    lease = repository.claim_job("invalid-solver", 60)
+    invalid = repository.solve_job(lease).model_copy(update={"plan": Plan()})
+    assert repository.complete_job(lease, invalid)
+    job = repository.job(str(jid), "demo-week", "demo")
+    assert job["status"] == "failed"
+    assert job["diagnosis"]["kind"] == "InvalidSolution"
+    assert job["diagnosis"]["violations"]
+    assert repository.recommendation_for_job(str(jid), "demo-week", "demo") is None
+
+
+def test_worker_records_solver_failure_then_retries(repository, monkeypatch):
+    jid = seed(repository)
+    solve_job = repository.solve_job
+
+    def solver_unavailable(_lease):
+        raise RuntimeError("simulated solver outage")
+
+    monkeypatch.setattr(repository, "solve_job", solver_unavailable)
+    assert JobWorker(repository, "worker").run_once()
+    failed_attempt = repository.job(str(jid), "demo-week", "demo")
+    assert failed_attempt["status"] == "queued"
+    assert failed_attempt["error"] == "RuntimeError"
+    assert repository.recommendation_for_job(str(jid), "demo-week", "demo") is None
+
+    with repository.pool.connection() as conn:
+        conn.execute(
+            "UPDATE jobs SET next_retry_at=now()-interval '1 second' WHERE id=%s",
+            (jid,),
+        )
+    monkeypatch.setattr(repository, "solve_job", solve_job)
+    assert JobWorker(repository, "worker").run_once()
+    assert repository.job(str(jid), "demo-week", "demo")["status"] == "succeeded"
 
 
 def test_competing_claims_and_expired_same_owner_are_fenced(repository):

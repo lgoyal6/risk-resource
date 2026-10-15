@@ -4,6 +4,8 @@ services:
     environment: {POSTGRES_DB: risk_resource, POSTGRES_USER: risk_resource, POSTGRES_PASSWORD: risk_resource}
     ports: ["5432:5432"]
     healthcheck: {test: ["CMD-SHELL", "pg_isready -U risk_resource"], interval: 5s, timeout: 3s, retries: 10}
+    mem_limit: 512m
+    cpus: 1.0
   api:
     build: ..
     environment:
@@ -11,3 +13,23 @@ services:
       RR_API_KEYS: ${RR_API_KEYS:?set a JSON map of SHA-256 API-key digests}
     ports: ["8000:8000"]
     depends_on: {postgres: {condition: service_healthy}}
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+  worker:
+    build: ..
+    command: [".venv/bin/python", "-m", "risk_resource.transport.worker"]
+    environment:
+      DATABASE_URL: postgresql://risk_resource:risk_resource@postgres:5432/risk_resource
+      RR_WORKER_ID: compose-worker
+    depends_on:
+      postgres: {condition: service_healthy}
+      api: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
