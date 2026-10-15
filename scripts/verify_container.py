@@ -38,7 +38,7 @@ try:
            "--memory", "256m", "--cpus", "1", "-e", "POSTGRES_DB=gate",
            "-e", "POSTGRES_PASSWORD=gate-only-password", "postgres:16.4")
     for _ in range(30):
-        if subprocess.run(["docker", "exec", database, "pg_isready", "-U", "postgres", "-d", "gate"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        if subprocess.run(["docker", "exec", database, "pg_isready", "-U", "postgres", "-d", "gate"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode == 0:
             break
         time.sleep(1)
     tokens = {hashlib.sha256(token.encode()).hexdigest(): {"user": token, "team": team, "role": role}
@@ -64,11 +64,10 @@ try:
     # The persistent API returns a job, so exercise the same worker boundary a
     # deployment uses before reading the recommendation for approval.
     docker(
-        "exec", name, ".venv/bin/python", "-c",
-        "import os; from risk_resource.adapters.postgres import PostgresRepository; "
-        "from risk_resource.adapters.worker import JobWorker; "
-        "r=PostgresRepository(os.environ['DATABASE_URL']); r.open(); r.migrate(); "
-        "JobWorker(r, 'container-gate').run_once(); r.close()",
+        "run", "--rm", "--network", name, "--memory", "512m", "--cpus", "1",
+        "-e", f"DATABASE_URL=postgresql://postgres:gate-only-password@{database}:5432/gate",
+        "-e", "RR_WORKER_ID=container-gate", image,
+        ".venv/bin/python", "-m", "risk_resource.transport.worker", "--once",
     )
     status, completed = request(
         port, "GET", f"/scenarios/demo-week/jobs/{solve['job_id']}", token="approver-token"
@@ -76,7 +75,7 @@ try:
     assert status == 200 and completed["job"]["status"] == "succeeded"
     recommendation = completed["recommendation"]
     assert recommendation["evaluation"]["feasible"]
-    body = {"action": "approve", "recommendation_id": recommendation["id"], "plan": recommendation["plan"], "actor": "spoof"}
+    body = {"action": "approve", "recommendation_id": recommendation["id"], "plan": recommendation["plan"], "actor": "spoof", "scenario_version": recommendation["scenario_version"]}
     path = "/scenarios/demo-week/decisions"
     status, decision = request(port, "POST", path, body, "approver-token", "retry-key")
     assert status == 201 and decision["actor"] == "approver-token"
@@ -84,7 +83,27 @@ try:
     assert status == 200 and replay == decision
     body["reason"] = "changed request"
     assert request(port, "POST", path, body, "approver-token", "retry-key")[0] == 409
-    assert docker("exec", database, "psql", "-U", "postgres", "-d", "gate", "-Atc", "select count(*) from schema_migrations") == "3"
+    assert docker("exec", database, "psql", "-U", "postgres", "-d", "gate", "-Atc", "select count(*) from schema_migrations") == "4"
+    # A real database stop is expected to make readiness fail closed. Starting
+    # the same container must restore access to the committed approval and job.
+    docker("stop", database)
+    assert request(port, "GET", "/ready")[0] == 503
+    docker("start", database)
+    for _ in range(30):
+        if subprocess.run(["docker", "exec", database, "pg_isready", "-U", "postgres", "-d", "gate"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("PostgreSQL failed to restart")
+    for _ in range(10):
+        if request(port, "GET", "/ready")[0] == 200:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("API did not recover after PostgreSQL restart")
+    assert request(port, "GET", "/scenarios/demo-week/decisions/verify", token="approver-token") == (200, {"valid": True})
+    recovered = request(port, "GET", f"/scenarios/demo-week/jobs/{solve['job_id']}", token="approver-token")
+    assert recovered[0] == 200 and recovered[1]["job"]["status"] == "succeeded"
     print("Container verified: migrations, roles, team isolation, actor binding, idempotent decisions")
 except Exception:
     subprocess.run(["docker", "logs", name], check=False)

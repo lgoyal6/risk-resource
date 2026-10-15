@@ -20,37 +20,37 @@ Then call `GET /scenarios`, `POST /scenarios/demo-week/baseline`, and `POST /sce
 
 ## Constraints and limits
 
-Mandatory work orders must be scheduled, technicians need the skill and site clearance, capacity is measured at the selected P50 or P90 quantile, clusters have daily offline limits, and precedence windows are enforced. The model does not sequence work within a day, model parts inventory, or react to failures during the week. Persistence, worker leases, authentication, and a production UI are planned integration layers; the current local slice uses an injected in-process repository so it is easy to run and test.
+Mandatory work orders must be scheduled, technicians need the skill and site clearance, capacity is measured at the selected P50 or P90 quantile, clusters have daily offline limits, and precedence windows are enforced. The model does not sequence work within a day, model parts inventory, or react to failures during the week. Without `DATABASE_URL`, the local demo uses in-process scenarios and decisions. With `DATABASE_URL`, scenarios, versioned inputs, jobs, recommendations, and decisions use PostgreSQL.
 
 Synthetic data generators and benchmarks must record their seed and provenance. Reports must distinguish the greedy baseline from CP-SAT and preserve the scenario hash for reproducibility.
 
 ## Durable deployment
 
-`migrations/001_initial.sql` defines tenant-scoped scenarios, idempotent jobs, recommendations, and immutable decisions. `adapters.postgres.PostgresRepository` applies numbered migrations and preserves the raw scenario JSON and content hash. `adapters.worker.JobWorker` is the lease/fencing seam for a Postgres-backed worker. Run the local stack with `docker compose -f infra/docker-compose.yml up --build`.
+`migrations/001_initial.sql` through `004_scenario_versions.sql` define tenant-scoped scenarios, version-pinned jobs, recommendations, and immutable decisions. `adapters.postgres.PostgresRepository` applies numbered migrations and preserves raw scenario JSON and content hashes. `adapters.worker.JobWorker` claims jobs with leases and fences stale workers. Run the local stack with `docker compose -f infra/docker-compose.yml up --build` after setting `RR_API_KEYS`.
 
 Set `RR_API_KEYS` to a JSON map keyed by SHA-256 API-key digest, for example `{"<sha256>":{"user":"ops","team":"demo","role":"approver"}}`. Keys are never logged. `scripts/benchmark.py` prints a fixed seeded workload comparison with objective and elapsed time.
 
 ## PostgreSQL verification
 
-With Docker available, run `scripts/verify_postgres.sh`. It starts the pinned PostgreSQL 16.4 service, waits for readiness, applies migrations, verifies scenario round-trip and tenant isolation, then removes the container and volume. Without `RR_POSTGRES_DSN`, the integration test is skipped rather than claiming coverage.
+With Docker available, run `bash scripts/verify_postgres.sh`. It starts a bounded PostgreSQL 16.4 container on a temporary loopback port, applies migrations, tests worker and HTTP persistence behavior, then removes the container. Without `RR_POSTGRES_DSN`, these integration tests are skipped rather than claiming coverage.
 
-The full Compose smoke test builds the API image, waits for PostgreSQL health, runs startup migrations, and confirms `GET /health` before teardown.
+Run `uv run --frozen python scripts/verify_container.py` to build and exercise the API image against a bounded PostgreSQL container. The gate checks startup migrations, role and team boundaries, a durable solve and approval, database outage readiness, PostgreSQL restart recovery, and cleanup.
 
 ### Security and worker verification
 
 Protected API requests require `X-API-Key`, configured through a JSON map of token SHA-256 digests in `RR_API_KEYS`. Roles and team membership come from configuration. Approval actors come from the authenticated user, and `Idempotency-Key` binds retries to the exact decision and actor. Identical retries return 200; conflicting reuse returns 409. The browser demo accepts a key in memory rather than storing it in browser storage.
 
-Run `bash scripts/verify_postgres.sh` to test actual worker claims, recommendation persistence, retry backoff, cancellation, expired-worker fencing, rollback, and append-only audit protection. The gate uses a uniquely owned database container with a temporary loopback port, creates isolated schemas per test, and cleans up on exit.
-
-The reference HTTP API remains in memory. `DATABASE_URL` does not enable persistent HTTP approvals. PostgreSQL worker verification does not establish production deployment, availability, or a complete persistent API workflow.
+Run `bash scripts/verify_postgres.sh` to test worker claims, recommendation persistence, retry backoff, cancellation, expired-worker fencing, crash redelivery, infeasible diagnosis, solver failure recovery, durable HTTP approvals, concurrent overrides, revision conflicts, and append-only audit protection. The gate creates isolated schemas per test and cleans up on exit. Local container verification does not establish production availability or operator adoption.
 
 
 ## Durable API mode
 
 Set `DATABASE_URL` to enable PostgreSQL-backed scenarios, solve jobs, recommendations,
-and append-only approval decisions. `POST /scenarios/{id}/solve` returns a job id; run
-`python -m risk_resource.adapters.worker` or embed `JobWorker` to claim and solve it,
-then poll `GET /scenarios/{id}/jobs/{job_id}`. Approval requires a recommendation UUID
-from that scenario and the authenticated team. Decision history and hash verification
-read PostgreSQL after an API restart. Job cancellation is team-scoped and fenced against
-in-flight workers. The API process closes its connection pool at shutdown.
+and append-only approval decisions. `POST /scenarios/{id}/solve` returns a job id. Run
+`python -m risk_resource.transport.worker` as a separate process, or start the API,
+worker, and PostgreSQL services with `docker compose -f infra/docker-compose.yml up --build`
+after setting `RR_API_KEYS`. `--once` processes at most one job and exits. Scenario
+revisions use `expected_version`; approvals and overrides must name the current version,
+and approvals must match the persisted recommendation digest. Decision history and hash
+verification read PostgreSQL after API restarts. Job cancellation is team-scoped and
+fenced against in-flight workers. The API process closes its connection pool at shutdown.

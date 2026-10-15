@@ -13,4 +13,4 @@ for _ in $(seq 1 30); do
 done
 rr_gate_port=$(docker port "$rr_gate_name" 5432/tcp | sed 's/.*://')
 export RR_POSTGRES_DSN="postgresql://risk_resource:gate-only-password@127.0.0.1:$rr_gate_port/risk_resource"
-uv run --frozen pytest -q tests/test_postgres_integration.py
+uv run --frozen pytest -q tests/test_postgres_integration.py tests/test_persistent_api_integration.py

@@ -11,6 +11,7 @@ class JobLease:
     team: str
     owner: str
     attempt: int
+    scenario_version: int = 1
 
 
 class JobWorker:
