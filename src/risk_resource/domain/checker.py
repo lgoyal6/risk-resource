@@ -1,10 +1,17 @@
+"""Check solver and operator plans independently of the optimization objective.
+Approvals and PostgresRepository use this verdict before persisting a result.
+Unknown assignment IDs remain violations and cannot enter cost lookups.
+"""
 from __future__ import annotations
 
 from .models import Plan, PlanEvaluation, Scenario
 from .objective import evaluate_objective
 
 
-def evaluate_plan(scenario: Scenario, plan: Plan) -> PlanEvaluation:
+def evaluate_plan(
+    scenario: Scenario, plan: Plan, *, require_mandatory: bool = True
+) -> PlanEvaluation:
+    """Check hard constraints; require_mandatory=False checks a partial plan."""
     violations: list[str] = []
     orders = {w.id: w for w in scenario.work_orders}
     techs = {t.id: t for t in scenario.technicians}
@@ -30,7 +37,7 @@ def evaluate_plan(scenario: Scenario, plan: Plan) -> PlanEvaluation:
         ):
             violations.append(f"{w.id} outside scheduling window")
     for w in scenario.work_orders:
-        if w.mandatory and w.id not in {a.work_order_id for a in plan.assignments}:
+        if require_mandatory and w.mandatory and w.id not in {a.work_order_id for a in plan.assignments}:
             violations.append(f"mandatory work order {w.id} is unscheduled")
         for predecessor in w.after:
             current = next(
@@ -42,8 +49,13 @@ def evaluate_plan(scenario: Scenario, plan: Plan) -> PlanEvaluation:
             )
             if current is not None and (prior is None or prior >= current):
                 violations.append(f"precedence violated: {predecessor} before {w.id}")
+    # Invalid references are already violations. Price only known assignments for diagnosis.
+    known_assignments = tuple(
+        a for a in plan.assignments
+        if a.work_order_id in orders and a.technician_id in techs
+    )
     for (tid, day), group in _groups(
-        plan.assignments, lambda a: (a.technician_id, a.day)
+        known_assignments, lambda a: (a.technician_id, a.day)
     ):
         t = techs.get(tid)
         if (
@@ -60,14 +72,14 @@ def evaluate_plan(scenario: Scenario, plan: Plan) -> PlanEvaluation:
         ):
             violations.append(f"technician {tid} exceeds capacity on day {day}")
     for (cluster, day), group in _groups(
-        plan.assignments,
+        known_assignments,
         lambda a: (assets[orders[a.work_order_id].asset_id].cluster, a.day),
     ):
         if len(
             {orders[a.work_order_id].asset_id for a in group}
         ) > scenario.max_offline_per_day.get(cluster, 0):
             violations.append(f"cluster {cluster} exceeds offline limit on day {day}")
-    objective, risk, travel, overdue = evaluate_objective(scenario, plan.assignments)
+    objective, risk, travel, overdue = evaluate_objective(scenario, known_assignments)
     return PlanEvaluation(
         feasible=not violations,
         objective_cents=objective,
