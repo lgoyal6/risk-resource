@@ -134,3 +134,7 @@ class SolveResult(BaseModel):
     deterministic: bool = True
     timed_out: bool = False
     explanation: tuple[str, ...] = ()
+    # Set only when the solver proved no feasible plan exists for the scenario.
+    proven_infeasible: bool = False
+    # Solver upper bound on the checker objective, when the solver reports one.
+    objective_bound_cents: int | None = None
