@@ -20,6 +20,7 @@ from risk_resource.application.approvals import (
     DigestMismatch,
     StaleScenario,
     bound_decision,
+    canonical_recommendation_id,
 )
 from risk_resource.application.services import SolveService, scenario_hash
 from risk_resource.domain.compare import compare, sensitivity
@@ -35,7 +36,7 @@ from risk_resource.transport.auth import Principal, principal, require_role
 
 class DecisionRequest(BaseModel):
     action: Literal["approve", "override", "reject", "rollback"]
-    recommendation_id: str = Field(min_length=1, max_length=128)
+    recommendation_id: str = Field(default="", max_length=128)
     reason: str = Field(default="", max_length=4096)
     plan: Plan | None = None
     actor: str | None = (
@@ -274,6 +275,14 @@ def create_app() -> FastAPI:
         scenario = owned(scenario_id, p)
         if not idempotency_key or len(idempotency_key) > 128:
             raise HTTPException(400, "Idempotency-Key must be 1..128 characters")
+        if entry.action != "reject" and not entry.recommendation_id:
+            raise HTTPException(422, "recommendation_id is required")
+        if persistent:
+            try:
+                reference = canonical_recommendation_id(entry.recommendation_id)
+            except ValueError as exc:
+                raise HTTPException(422, "recommendation_id must be a UUID") from exc
+            entry = entry.model_copy(update={"recommendation_id": reference})
         payload = {**entry.model_dump(mode="json", exclude={"actor"}), "actor": p.user}
         digest = sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()

@@ -251,3 +251,61 @@ def test_decision_append_uses_one_pool_connection(durable_api):
         assert len(repo.decisions(scenario.id, "demo")) == 1
     finally:
         repo.close()
+
+
+@pytest.mark.parametrize("representation", ["upper", "hex"])
+def test_decision_reference_is_canonical_before_hash_and_replay(durable_api, representation):
+    from uuid import UUID
+
+    dsn, token = durable_api
+    headers = {"X-API-Key": token}
+    with TestClient(create_app()) as client:
+        queued = client.post("/scenarios/demo-week/solve", headers=headers).json()
+        repo = PostgresRepository(dsn)
+        repo.open()
+        try:
+            assert JobWorker(repo, "canonical-reference-worker").run_once()
+        finally:
+            repo.close()
+        result = client.get(
+            f"/scenarios/demo-week/jobs/{queued['job_id']}", headers=headers
+        ).json()["recommendation"]
+        canonical = result["id"]
+        variant = canonical.upper() if representation == "upper" else UUID(canonical).hex
+        body = {"action": "approve", "recommendation_id": variant,
+                "plan": result["plan"], "scenario_version": 1}
+        decision_headers = {**headers, "Idempotency-Key": "canonical-reference"}
+        created = client.post("/scenarios/demo-week/decisions", json=body, headers=decision_headers)
+        assert created.status_code == 201, created.text
+        assert created.json()["recommendation_id"] == canonical
+        replay = client.post("/scenarios/demo-week/decisions",
+                             json={**body, "recommendation_id": canonical}, headers=decision_headers)
+        assert replay.status_code == 200, replay.text
+        assert replay.json() == created.json()
+    with TestClient(create_app()) as restarted:
+        assert restarted.get("/scenarios/demo-week/decisions/verify", headers=headers).json() == {"valid": True}
+
+
+def test_reject_without_recommendation_survives_replay_and_restart(durable_api):
+    _dsn, token = durable_api
+    headers = {"X-API-Key": token, "Idempotency-Key": "no-result-rejection"}
+    body = {"action": "reject", "reason": "No result is suitable", "scenario_version": 1}
+    with TestClient(create_app()) as client:
+        created = client.post("/scenarios/demo-week/decisions", json=body, headers=headers)
+        assert created.status_code == 201, created.text
+        assert created.json()["recommendation_id"] == ""
+        replay = client.post("/scenarios/demo-week/decisions", json=body, headers=headers)
+        assert replay.status_code == 200 and replay.json() == created.json()
+    with TestClient(create_app()) as restarted:
+        assert restarted.get("/scenarios/demo-week/decisions/verify", headers=headers).json() == {"valid": True}
+
+
+def test_non_uuid_rejection_reference_does_not_append_an_unverifiable_entry(durable_api):
+    _dsn, token = durable_api
+    headers = {"X-API-Key": token, "Idempotency-Key": "invalid-reference"}
+    body = {"action": "reject", "recommendation_id": "external-note",
+            "reason": "No result is suitable", "scenario_version": 1}
+    with TestClient(create_app()) as client:
+        rejected = client.post("/scenarios/demo-week/decisions", json=body, headers=headers)
+        assert rejected.status_code == 422, rejected.text
+        assert client.get("/scenarios/demo-week/decisions/verify", headers=headers).json() == {"valid": True}
