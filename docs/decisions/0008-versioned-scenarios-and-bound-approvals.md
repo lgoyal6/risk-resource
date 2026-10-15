@@ -84,3 +84,13 @@ without `scenario_version` are accepted only in memory mode.
 Approvals survive API restarts because every read goes to PostgreSQL. A
 planner editing a scenario invalidates pending approvals of older
 recommendations by construction, not by convention.
+
+## Durable reference encoding
+
+UUID aliases are normalized to lowercase hyphenated UUID text before request
+idempotency or decision hashes are calculated. Durable non-UUID labels are
+rejected with 422. A rejection can omit its recommendation reference, which is
+hashed as an empty string and stored as SQL NULL. Other actions require a
+reference. The repository rejects entries hashed with noncanonical references.
+Legacy in-memory labels remain supported. Existing audit rows remain immutable;
+this prevents new mismatches rather than rewriting past records.

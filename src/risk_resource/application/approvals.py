@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from hashlib import sha256
+from uuid import UUID
 
 from risk_resource.domain.checker import evaluate_plan
 from risk_resource.domain.decisions import DecisionEntry, append_decision
@@ -21,6 +22,11 @@ class StaleScenario(ValueError):
 
 class DigestMismatch(ValueError):
     """The plan does not match what the decision claims to adopt."""
+
+
+def canonical_recommendation_id(value: str) -> str:
+    """Use the UUID text PostgreSQL returns, or no reference for a rejection."""
+    return str(UUID(value)) if value else ""
 
 
 def plan_digest(plan: Plan) -> str:
@@ -62,6 +68,9 @@ def bound_decision(
         raise StaleScenario(
             f"scenario is at version {current_version}, decision names {requested_version}"
         )
+    recommendation_id = canonical_recommendation_id(recommendation_id)
+    if action != "reject" and not recommendation_id:
+        raise ValueError("recommendation_id is required")
     digest: str | None = None
     delta: int | None = None
     if action in {"approve", "override", "rollback"} and plan is None:

@@ -17,6 +17,7 @@ from risk_resource.adapters.worker import JobLease
 from risk_resource.application.approvals import (
     Recommendation,
     StaleScenario,
+    canonical_recommendation_id,
     plan_digest,
 )
 from risk_resource.application.services import SolveService, scenario_hash
@@ -470,6 +471,8 @@ class PostgresRepository:
         idempotency_key: str | None = None,
         request_hash: str | None = None,
     ) -> tuple[DecisionEntry, bool]:
+        if entry.recommendation_id != canonical_recommendation_id(entry.recommendation_id):
+            raise ValueError("decision reference must be canonical before hashing")
         with self.pool.connection() as conn:
             # The row lock makes previous_hash and the append-only hash chain linear,
             # and serializes decisions against scenario revisions.
