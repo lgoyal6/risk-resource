@@ -9,7 +9,12 @@ from risk_resource.adapters.cp_sat import CpSatSolver
 from risk_resource.application.services import GreedySolver
 from risk_resource.sample import demo_scenario
 
-app = FastAPI(title="Risk Resource public demo", docs_url=None, redoc_url=None)
+app = FastAPI(
+    title="Risk Resource public demo",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 
 @app.get("/api/demo")
