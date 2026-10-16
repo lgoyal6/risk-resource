@@ -1,0 +1,77 @@
+<!doctype html>
+<!-- Risk Resource public demo, backed by the same greedy and CP-SAT solvers as the app. -->
+<!-- The API accepts no user scenario and uses no database, credentials, or external service. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Risk Resource · synthetic demo</title>
+    <style>
+      :root { color: #18212b; background: #f4f6f8; font: 16px/1.5 system-ui, sans-serif; }
+      body { max-width: 980px; margin: 0 auto; padding: 28px 18px 56px; }
+      header, section { background: #fff; border: 1px solid #d8dee6; border-radius: 14px; padding: 22px; margin: 0 0 16px; }
+      h1, h2, p { margin-top: 0; } h1 { font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.05; margin-bottom: 12px; }
+      .label { color: #315c86; font-size: .78rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+      .notice { border-left: 4px solid #315c86; background: #eef5fc; padding: 12px 14px; }
+      button { border: 0; border-radius: 8px; background: #152c42; color: #fff; cursor: pointer; font: inherit; font-weight: 650; padding: 11px 16px; }
+      button:disabled { cursor: wait; opacity: .65; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+      .metric { background: #f4f6f8; border-radius: 10px; padding: 12px; }
+      .metric strong { display: block; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+      .metric span, .muted { color: #536273; font-size: .9rem; }
+      pre { overflow: auto; background: #f4f6f8; border-radius: 10px; padding: 14px; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <p class="label">Synthetic demo · no cloud or fleet data</p>
+      <h1>Plan maintenance without exceeding operating limits.</h1>
+      <p>Compare a greedy baseline with the CP-SAT plan for one fixed GPU-fleet scenario. Every recommendation is checked against the same feasibility rules.</p>
+      <p class="notice">This demo runs the bundled synthetic <code>demo-week</code>. It makes no changes to a fleet and stores no user input.</p>
+      <button id="run" type="button">Run the comparison</button>
+      <p id="status" class="muted" role="status" aria-live="polite">The solver runs only after you select the button.</p>
+    </header>
+    <section id="results" hidden>
+      <h2>Result</h2>
+      <div class="grid" id="metrics"></div>
+      <h2 style="margin-top:24px">Scheduled assignments</h2>
+      <div class="grid"><article><h3>Greedy baseline</h3><pre id="baseline"></pre></article><article><h3>CP-SAT plan</h3><pre id="optimized"></pre></article></div>
+      <p class="muted">A feasible result is evidence for this fixed synthetic scenario only. It does not predict real fleet outcomes or prove deployment readiness.</p>
+    </section>
+    <script>
+      const button = document.querySelector("#run");
+      const status = document.querySelector("#status");
+      const results = document.querySelector("#results");
+      const money = (cents) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        status.textContent = "Starting the synthetic comparison. A cold start may take a few seconds.";
+        try {
+          const response = await fetch("/api/demo");
+          if (!response.ok) throw new Error(`Request failed (${response.status})`);
+          const data = await response.json();
+          const values = [
+            [data.scenario.assets.length, "synthetic assets"],
+            [data.scenario.work_orders.length, "synthetic work orders"],
+            [data.baseline.evaluation.feasible ? "Feasible" : "Infeasible", "greedy baseline"],
+            [data.optimized.evaluation.feasible ? "Feasible" : "Infeasible", "CP-SAT plan"],
+            [money(data.baseline.evaluation.objective_cents), "baseline objective"],
+            [money(data.optimized.evaluation.objective_cents), "CP-SAT objective"],
+          ];
+          document.querySelector("#metrics").innerHTML = values.map(([value, label]) => `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`).join("");
+          const assignments = (result) => result.plan.assignments.map((item) => `Day ${item.day + 1}: ${item.work_order_id} → ${item.technician_id}`).join("\n") || "No assignments";
+          document.querySelector("#baseline").textContent = assignments(data.baseline);
+          document.querySelector("#optimized").textContent = assignments(data.optimized);
+          results.hidden = false;
+          status.textContent = data.evidence_boundary;
+        } catch (error) {
+          status.textContent = error instanceof Error ? error.message : "The demo could not run.";
+        } finally {
+          button.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
