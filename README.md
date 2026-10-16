@@ -18,6 +18,8 @@ Then call `GET /scenarios`, `POST /scenarios/demo-week/baseline`, and `POST /sce
 
 The Vercel demo serves a static page and one read-only endpoint for a fixed synthetic scenario. It runs the existing greedy and CP-SAT solvers when a visitor selects the comparison button. It accepts no user scenario and exposes no database, approval, or write routes. Results describe this fixture only, not a real fleet or production deployment.
 
+Set the Vercel project configuration variable `PYTHONPATH=src` for preview and production so the Python runtime can import the source package. The FastAPI entrypoint is `src.risk_resource.transport.demo_api:app`; its function limit is eight seconds.
+
 ## Architecture
 
 `domain/` contains typed models, objective coefficients, feasibility checking, the greedy baseline, and hash-chained decisions. `application/` coordinates use cases. `adapters/` contains the CP-SAT solver port implementation. `transport/` exposes the public HTTP workflow. The solver uses one worker, a fixed seed, and a bounded time budget; an optimized plan is accepted only after the shared checker validates it.

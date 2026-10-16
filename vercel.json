@@ -2,6 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "outputDirectory": "public",
   "functions": {
-    "api/demo.py": { "maxDuration": 8 }
+    "src/risk_resource/transport/demo_api.py": {
+      "maxDuration": 8
+    }
   }
 }
