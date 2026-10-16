@@ -14,3 +14,12 @@ def test_public_demo_runs_fixed_fixture_without_credentials_or_writes(monkeypatc
     assert body["scenario"]["provenance"] == "demo"
     assert body["baseline"]["evaluation"]["feasible"] is True
     assert body["optimized"]["evaluation"]["feasible"] is True
+
+
+def test_public_demo_does_not_expose_private_api_routes():
+    client = TestClient(app)
+
+    assert client.get("/health").status_code == 404
+    assert client.get("/scenarios").status_code == 404
+    assert client.post("/scenarios", json={}).status_code == 404
+    assert client.get("/openapi.json").status_code == 404
