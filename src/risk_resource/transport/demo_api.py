@@ -9,8 +9,8 @@ from fastapi import FastAPI, Query
 
 from risk_resource.adapters.cp_sat import CpSatSolver
 from risk_resource.application.services import GreedySolver
-from risk_resource.sample import demo_scenario
 from risk_resource.domain.models import Skill
+from risk_resource.sample import demo_scenario
 
 app = FastAPI(
     title="Risk Resource public demo",
