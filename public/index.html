@@ -1,6 +1,6 @@
 <!doctype html>
 <!-- Risk Resource public demo, backed by the same greedy and CP-SAT solvers as the app. -->
-<!-- The API accepts no user scenario and uses no database, credentials, or external service. -->
+<!-- Bounded controls change only the synthetic scenario, with no database or provider calls. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -28,9 +28,13 @@
     <header>
       <p class="label">Synthetic demo · no cloud or fleet data</p>
       <h1>Plan maintenance without exceeding operating limits.</h1>
-      <p>Compare a greedy baseline with the CP-SAT plan for one fixed GPU-fleet scenario. Every recommendation is checked against the same feasibility rules.</p>
-      <p class="notice">This demo runs the bundled synthetic <code>demo-week</code>. It makes no changes to a fleet and stores no user input.</p>
-      <button id="run" type="button">Run the comparison</button>
+      <p>Change maintenance capacity and skills, then compare the greedy baseline with the CP-SAT plan. Every recommendation is checked against the same feasibility rules.</p>
+      <p class="notice">Controls change the bundled synthetic <code>demo-week</code>. They make no changes to a fleet and store no user input.</p>
+      <form id="scenario-controls"><div class="grid">
+        <label>Technician minutes per day<select id="technician-minutes" aria-label="Technician minutes per day"><option value="">Original availability</option><option>60</option><option>120</option><option>240</option><option>480</option></select></label>
+        <label>Offline assets per cluster per day<select id="max-offline" aria-label="Offline assets per cluster per day"><option>0</option><option selected>1</option><option>2</option><option>3</option></select></label>
+        <label><input id="firmware-skill" type="checkbox" checked> Firmware-qualified technician available</label>
+      </div><button id="run" type="submit">Run the comparison</button></form>
       <p id="status" class="muted" role="status" aria-live="polite">The solver runs only after you select the button.</p>
     </header>
     <section id="results" hidden>
@@ -38,20 +42,34 @@
       <div class="grid" id="metrics"></div>
       <h2 style="margin-top:24px">Scheduled assignments</h2>
       <div class="grid"><article><h3>Greedy baseline</h3><pre id="baseline"></pre></article><article><h3>CP-SAT plan</h3><pre id="optimized"></pre></article></div>
-      <p class="muted">A feasible result is evidence for this fixed synthetic scenario only. It does not predict real fleet outcomes or prove deployment readiness.</p>
+      <p class="muted">A feasible result applies to the selected synthetic constraints. An infeasible result means the plan cannot satisfy those limits. Neither predicts real fleet outcomes.</p>
     </section>
     <script>
       const button = document.querySelector("#run");
       const status = document.querySelector("#status");
       const results = document.querySelector("#results");
       const money = (cents) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
-      button.addEventListener("click", async () => {
+      const form = document.querySelector("#scenario-controls");
+      let revision = 0, active;
+      form.addEventListener("input", () => {
+        revision++; active?.abort(); results.hidden = true; button.disabled = false;
+        status.textContent = "Inputs changed. Run the comparison again.";
+      });
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const current = ++revision;
+        active?.abort(); active = new AbortController();
+        results.hidden = true;
         button.disabled = true;
         status.textContent = "Starting the synthetic comparison. A cold start may take a few seconds.";
         try {
-          const response = await fetch("/api/demo");
+          const query = new URLSearchParams({ firmware_skill: String(document.querySelector("#firmware-skill").checked), max_offline: document.querySelector("#max-offline").value });
+          const minutes = document.querySelector("#technician-minutes").value;
+          if (minutes) query.set("technician_minutes", minutes);
+          const response = await fetch("/api/demo?" + query, { signal: active.signal });
           if (!response.ok) throw new Error(`Request failed (${response.status})`);
           const data = await response.json();
+          if (current !== revision) return;
           const values = [
             [data.scenario.assets.length, "synthetic assets"],
             [data.scenario.work_orders.length, "synthetic work orders"],
@@ -67,9 +85,9 @@
           results.hidden = false;
           status.textContent = data.evidence_boundary;
         } catch (error) {
-          status.textContent = error instanceof Error ? error.message : "The demo could not run.";
+          if (current === revision) status.textContent = error instanceof Error ? error.message : "The demo could not run.";
         } finally {
-          button.disabled = false;
+          if (current === revision) button.disabled = false;
         }
       });
     </script>

@@ -23,3 +23,16 @@ def test_public_demo_does_not_expose_private_api_routes():
     assert client.get("/scenarios").status_code == 404
     assert client.post("/scenarios", json={}).status_code == 404
     assert client.get("/openapi.json").status_code == 404
+
+
+def test_visitor_constraints_change_the_solved_scenario():
+    response = TestClient(app).get("/api/demo?technician_minutes=60&firmware_skill=false&max_offline=0")
+    assert response.status_code == 200
+    body = response.json()
+    assert all(t["available_minutes_per_day"] == 60 for t in body["scenario"]["technicians"])
+    assert all("firmware" not in t["skills"] for t in body["scenario"]["technicians"])
+    assert body["optimized"]["evaluation"]["feasible"] is False
+
+
+def test_visitor_cannot_request_unbounded_capacity():
+    assert TestClient(app).get("/api/demo?technician_minutes=999999").status_code == 422
